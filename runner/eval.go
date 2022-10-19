@@ -27,9 +27,6 @@ func _logln(level, msg string, args ...any) {
 		logPrefixSet = true
 	}
 	baseMsg := "[" + level + "] " + time.Now().Format(iso8601Format) + " " + msg
-	if msg[len(msg)-1] != '\n' {
-		msg += "\n"
-	}
 	log.Printf(baseMsg, args...)
 }
 
@@ -85,7 +82,18 @@ func (ec EvalContext) evalMacros(content string, project *ProjectState, pageInde
 
 		return pongo2.AsSafeValue(string(bs)), nil
 	}
-	pongo2.RegisterFilter("json", pongoJsonify)
+
+	if pongo2.FilterExists("json") {
+		err := pongo2.ReplaceFilter("json", pongoJsonify)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		err := pongo2.RegisterFilter("json", pongoJsonify)
+		if err != nil {
+			return "", err
+		}
+	}
 
 	tpl, err := pongo2.FromString(content)
 	if err != nil {
@@ -130,6 +138,7 @@ func (ec EvalContext) evalMacros(content string, project *ProjectState, pageInde
 type EvalContext struct {
 	settings Settings
 	fsBase   string
+	path     string
 }
 
 func (ec EvalContext) decrypt(e *Encrypt) (string, error) {
@@ -172,7 +181,7 @@ func (ec EvalContext) decrypt(e *Encrypt) (string, error) {
 }
 
 func NewEvalContext(s Settings, fsBase string) EvalContext {
-	return EvalContext{s, fsBase}
+	return EvalContext{s, fsBase, ""}
 }
 
 func (ec EvalContext) Eval(projectId, panelId string) (error, string) {

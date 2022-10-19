@@ -7,9 +7,9 @@ brew install cmake jq r julia node@16 npm go-jsonnet
 brew link --overwrite node@16
 
 # Install go
-sudo curl -LO https://go.dev/dl/go1.18.1.darwin-amd64.tar.gz
+sudo curl -LO https://go.dev/dl/go1.19.darwin-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.18.1.darwin-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.19.darwin-amd64.tar.gz
 sudo mv /usr/local/go/bin/go /usr/local/bin/go
 sudo mv /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
@@ -26,7 +26,7 @@ yarn
 # Install ODBC Driver
 brew tap microsoft/mssql-release https://github.com/Microsoft/homebrew-mssql-release
 brew update
-HOMEBREW_NO_ENV_FILTERING=1 ACCEPT_EULA=Y brew install msodbcsql18 mssql-tools18
+HOMEBREW_ACCEPT_EULA=Y brew install msodbcsql18 mssql-tools18
 
 # Install docker using colima (not present because of licenses)
 brew install colima

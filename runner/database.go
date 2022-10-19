@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
@@ -224,11 +223,7 @@ func (ec EvalContext) getConnectionString(dbInfo DatabaseConnectorInfoDatabase) 
 		if genericUserPass != "" {
 			// Already proven to be ok
 			pass, _ := ec.decrypt(&dbInfo.Password)
-			query = fmt.Sprintf("username=%s&password=%s&", u.username, pass)
-		}
-
-		if u.database != "" {
-			query += "database=" + u.database
+			query = fmt.Sprintf("username=%s&password=%s", u.username, pass)
 		}
 
 		if !strings.Contains(u.address, ":") {
@@ -236,7 +231,7 @@ func (ec EvalContext) getConnectionString(dbInfo DatabaseConnectorInfoDatabase) 
 		}
 
 		query += u.extraArgs
-		return "clickhouse", fmt.Sprintf("tcp://%s?%s", u.address, query), nil
+		return "clickhouse", fmt.Sprintf("tcp://%s/%s?%s", u.address, u.database, query), nil
 	case SQLiteDatabase:
 		// defined in database_sqlite.go, includes regexp support
 		return "sqlite3_extended", resolvePath(u.database), nil
@@ -255,7 +250,7 @@ func (ec EvalContext) getConnectionString(dbInfo DatabaseConnectorInfoDatabase) 
 		}
 
 		if addr.Scheme == "" {
-			addr.Scheme = Neo4jDatabase
+			addr.Scheme = string(Neo4jDatabase)
 		}
 
 		if addr.Port() == "" {
@@ -269,46 +264,49 @@ func (ec EvalContext) getConnectionString(dbInfo DatabaseConnectorInfoDatabase) 
 
 		return "neo4j", addr.String(), nil
 	case ODBCDatabase:
-		params := map[string]string{}
+		type kv struct {
+			key   string
+			value string
+		}
+		var params Vector[kv]
 		var err error
 
 		if strings.Contains(u.address, "localhost") {
 			split := strings.Split(u.address, ":")
-			params["server"] = fmt.Sprintf("%s,%s", split[0], split[1])
+			params.Append(kv{"server", fmt.Sprintf("%s,%s", split[0], split[1])})
 		} else {
 			addr, err := url.Parse(u.address)
 			if err != nil {
 				return "", "", err
 			}
-			params["server"] = fmt.Sprintf("%s,%s", addr.Hostname(), addr.Port())
+			params.Append(kv{"server", fmt.Sprintf("%s,%s", addr.Hostname(), addr.Port())})
 		}
-		params["database"] = u.database
+		params.Append(kv{"database", u.database})
 
 		var ok bool
-		params["driver"], ok = dbInfo.Extra["driver"]
+		driver, ok := dbInfo.Extra["driver"]
 		if !ok {
-			return "", "", fmt.Errorf("driver not found")
+			return "", "", fmt.Errorf("Must specify driver")
 		}
+		params.Append(kv{"driver", driver})
 
-		params["pwd"], err = ec.decrypt(&dbInfo.Password)
+		pwd, err := ec.decrypt(&dbInfo.Password)
 		if err != nil {
 			return "", "", err
 		}
+		params.Append(kv{"pwd", pwd})
 
-		params["uid"] = dbInfo.Username
+		params.Append(kv{"uid", dbInfo.Username})
 		if dbInfo.Username == "" {
-			params["trusted_connection"] = "yes" // TODO: configure TLS
-		}
-
-		val, ok := dbInfo.Extra["trust_server_certificate"]
-		if ok && val == "Yes" {
-			params["TrustServerCertificate"] = val
+			params.Append(kv{"trusted_connection", "yes"}) // TODO: configure TLS
 		}
 
 		var conn string
-		for k, v := range params {
-			conn += k + "=" + v + ";"
+		for _, kv := range params.List() {
+			conn += kv.key + "=" + kv.value + ";"
 		}
+
+		conn += dbInfo.Extra["params"]
 
 		return "odbc", conn, nil
 	}
@@ -387,18 +385,20 @@ func writeRowFromDatabase(dbInfo DatabaseConnectorInfoDatabase, out *ResultWrite
 	return out.WriteRow(row)
 }
 
-func (ec EvalContext) loadJSONArrayPanel(projectId, panelId string) (chan map[string]any, error) {
+func (ec *EvalContext) loadJSONArrayPanel(projectId, panelId string) (chan map[string]any, error) {
 	f := ec.GetPanelResultsFile(projectId, panelId)
-	return loadJSONArrayFile(f)
+	return loadJSONArrayFileWithPath(f, ec.path)
 }
 
-func (ec EvalContext) EvalDatabasePanel(
+func (ec *EvalContext) EvalDatabasePanelWithWriter(
 	project *ProjectState,
 	pageIndex int,
 	panel *PanelInfo,
 	panelResultLoader func(projectId, panelId string) (chan map[string]any, error),
 	cache CacheSettings,
+	w *ResultWriter,
 ) error {
+
 	var connector *ConnectorInfo
 	for _, c := range project.Connectors {
 		cc := c
@@ -434,12 +434,6 @@ func (ec EvalContext) EvalDatabasePanel(
 	if err != nil {
 		return err
 	}
-
-	w, err := ec.GetResultWriter(project.Id, panel.Id)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
 
 	if dbInfo.Address == "" {
 		dbInfo.Address = "localhost:" + defaultPorts[dbInfo.Type]
@@ -485,7 +479,7 @@ func (ec EvalContext) EvalDatabasePanel(
 	idMap := getIdMap(project.Pages[pageIndex])
 	idShapeMap := getIdShapeMap(project.Pages[pageIndex])
 
-	panelsToImport, query, err := transformDM_getPanelCalls(
+	panelsToImport, query, path, err := transformDM_getPanelCalls(
 		panel.Content,
 		idShapeMap,
 		idMap,
@@ -496,10 +490,11 @@ func (ec EvalContext) EvalDatabasePanel(
 	if err != nil {
 		return err
 	}
+	ec.path = path
 
 	// Copy remote sqlite database to tmp file if remote
 	if dbInfo.Type == SQLiteDatabase && server != nil {
-		tmp, err := ioutil.TempFile("", "sqlite-copy")
+		tmp, err := os.CreateTemp("", "sqlite-copy")
 		if err != nil {
 			return err
 		}
@@ -533,7 +528,7 @@ func (ec EvalContext) EvalDatabasePanel(
 		}
 
 		var db *sqlx.DB
-		if vendor == ODBCDatabase {
+		if vendor == string(ODBCDatabase) {
 			db, err = openODBCDriver(connStr)
 		} else {
 			db, err = sqlx.Open(vendor, connStr)
@@ -577,7 +572,7 @@ func (ec EvalContext) EvalDatabasePanel(
 				if err != nil {
 					// odbc driver returns an error for an empty result
 					// see https://github.com/alexbrainman/odbc/blob/9c9a2e61c5e2c1a257a51ea49169fc9008c51f0e/odbcstmt.go#L134
-					if vendor == ODBCDatabase && err.Error() == "Stmt did not create a result set" {
+					if vendor == string(ODBCDatabase) && err.Error() == "Stmt did not create a result set" {
 						return nil, nil
 					}
 
@@ -608,4 +603,20 @@ func (ec EvalContext) EvalDatabasePanel(
 
 		return err
 	})
+}
+
+func (ec *EvalContext) EvalDatabasePanel(
+	project *ProjectState,
+	pageIndex int,
+	panel *PanelInfo,
+	panelResultLoader func(projectId, panelId string) (chan map[string]any, error),
+	cache CacheSettings,
+) error {
+	w, err := ec.GetResultWriter(project.Id, panel.Id)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	return ec.EvalDatabasePanelWithWriter(project, pageIndex, panel, panelResultLoader, cache, w)
 }

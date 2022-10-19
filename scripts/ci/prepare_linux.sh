@@ -9,6 +9,24 @@
 
 set -ex
 
+function retry {
+    ok="false"
+    for i in $(seq $1); do
+	if bash -c "$2" ; then
+	    ok="true"
+	    break
+	fi
+
+	echo "Retrying... $2"
+	sleep 5s
+    done
+
+    if [[ "$ok" == "false" ]]; then
+	echo "Failed after retries... $2"
+	exit 1
+    fi
+}
+
 # Set up Node.js, jq
 curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
 sudo apt-get update -y
@@ -19,15 +37,18 @@ sudo apt-get install -y nodejs cmake
 #
 # IMPORTANT: Only run in Github CI.
 #
-race=""
 if [[ "$1" == "--integration-tests" ]]; then
     ./scripts/ci/prepare_linux_integration_test_setup_only.sh
-    race="-race"
 fi
 
 # Set up project
 sudo npm install --global yarn
-yarn
+retry 5 yarn
+
+race=""
+if [[ "$1" == "--integration-tests" ]] || [[ "$1" == "--race" ]]; then
+    race="-race"
+fi
 
 # Install ODBC
 ./runner/plugins/odbc/build.sh $race

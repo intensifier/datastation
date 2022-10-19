@@ -7,7 +7,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -17,7 +16,7 @@ import (
 
 // ADAPTED: https://gist.github.com/stefanprodan/2d20d0c6fdab6f14ce8219464e8b4b9a
 func getSSHPrivateKeySigner(privateKeyFile, passphrase string) (ssh.AuthMethod, error) {
-	pemBytes, err := ioutil.ReadFile(resolvePath(privateKeyFile))
+	pemBytes, err := os.ReadFile(resolvePath(privateKeyFile))
 	if err != nil {
 		return nil, edsef("Unable to read private key: %s", err)
 	}
@@ -28,6 +27,7 @@ func getSSHPrivateKeySigner(privateKeyFile, passphrase string) (ssh.AuthMethod, 
 	}
 
 	// Handle encrypted private keys
+	//nolint
 	if x509.IsEncryptedPEMBlock(pemBlock) {
 		pemBlock.Bytes, err = x509.DecryptPEMBlock(pemBlock, []byte(passphrase))
 		if err != nil {
@@ -229,7 +229,7 @@ func chanFromConn(conn net.Conn) chan []byte {
 }
 
 // SOURCE: https://www.stavros.io/posts/proxying-two-connections-go/
-func pipe(conn1 net.Conn, conn2 net.Conn) {
+func pipe(conn1 net.Conn, conn2 net.Conn) error {
 	chan1 := chanFromConn(conn1)
 	chan2 := chanFromConn(conn2)
 
@@ -237,15 +237,21 @@ func pipe(conn1 net.Conn, conn2 net.Conn) {
 		select {
 		case b1 := <-chan1:
 			if b1 == nil {
-				return
+				return nil
 			} else {
-				conn2.Write(b1)
+				_, err := conn2.Write(b1)
+				if err != nil {
+					return err
+				}
 			}
 		case b2 := <-chan2:
 			if b2 == nil {
-				return
+				return nil
 			} else {
-				conn1.Write(b2)
+				_, err := conn1.Write(b2)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -284,7 +290,11 @@ func (ec EvalContext) withRemoteConnection(si *ServerInfo, host, port string, cb
 			return
 		}
 
-		pipe(localConn, remoteConn)
+		err = pipe(localConn, remoteConn)
+		if err != nil {
+			errC <- err
+			return
+		}
 	}()
 
 	localPort := localConn.Addr().(*net.TCPAddr).Port

@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	jsonutil "github.com/multiprocessio/go-json"
+
+	"cloud.google.com/go/bigquery"
 )
 
 func maybeConvertNumber(value any, convertNumbers bool) any {
@@ -103,9 +105,7 @@ func (rw *ResultWriter) SetFields(fs []string) {
 		rw.fields = make([]string, len(fs))
 	}
 
-	for i, f := range fs {
-		rw.fields[i] = f
-	}
+	copy(rw.fields, fs)
 }
 
 func (rw *ResultWriter) WriteRecord(r []string, convertNumbers bool) error {
@@ -115,6 +115,12 @@ func (rw *ResultWriter) WriteRecord(r []string, convertNumbers bool) error {
 
 func (rw *ResultWriter) WriteAnyRecord(r []any, convertNumbers bool) error {
 	recordToMap[any](rw.rowCache, &rw.fields, r, convertNumbers)
+	return rw.WriteRow(rw.rowCache)
+}
+
+// Super lame to need this but you can't parameterize methods with type parameters.
+func (rw *ResultWriter) WriteBigQueryRecord(r []bigquery.Value, convertNumbers bool) error {
+	recordToMap[bigquery.Value](rw.rowCache, &rw.fields, r, convertNumbers)
 	return rw.WriteRow(rw.rowCache)
 }
 
@@ -146,8 +152,6 @@ type JSONResultItemWriter struct {
 	isObject bool
 	// Sampled rows
 	sample []any
-	// Counter
-	written int
 }
 
 func openJSONResultItemWriter(f string, opts *JSONResultItemWriterOptions) (ResultItemWriter, error) {

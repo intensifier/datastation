@@ -10,6 +10,13 @@ import shutil
 import subprocess
 import sys
 
+# ASSERT correct GO version
+ACTIVE_GO_VERSION = subprocess.check_output(['go', 'version']).decode().strip().split(' ')[2][len('go'):]
+DESIRED_GO_VERSION = '1.19'
+if ACTIVE_GO_VERSION != DESIRED_GO_VERSION:
+    print(f'GO VERSION MISMATCH: Wanted Go version "{DESIRED_GO_VERSION}" got "{ACTIVE_GO_VERSION}"')
+    exit(1)
+
 IS_WINDOWS = os.name == 'nt'
 
 BUILTIN_VARIABLES = {
@@ -161,6 +168,11 @@ def eval_line(line):
         quote_line(line, show=True)
         with open(to, 'a') as to:
             to.write('\n'+what)
+        return
+    elif line[0] == 'stripleft':
+        var = line[1]
+        what = line[2]
+        os.environ[var] = os.environ[var].lstrip(what)
         return
     elif line[0] == 'prepend':
         what = line[1]

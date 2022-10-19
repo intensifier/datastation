@@ -108,7 +108,6 @@ type panelToImport struct {
 	id        string
 	columns   []column
 	tableName string
-	path      string
 }
 
 var dmGetPanelRe = regexp.MustCompile(`(DM_getPanel\((?P<number>[0-9]+)(((,\s*(?P<numbersinglepath>"(?:[^"\\]|\\.)*\"))?)|(,\s*(?P<numberdoublepath>'(?:[^'\\]|\\.)*\'))?)\))|(DM_getPanel\((?P<singlequote>'(?:[^'\\]|\\.)*\'(,\s*(?P<singlepath>'(?:[^'\\]|\\.)*\'))?)\))|(DM_getPanel\((?P<doublequote>"(?:[^"\\]|\\.)*\"(,\s*(?P<doublepath>"(?:[^"\\]|\\.)*\"))?)\))`)
@@ -120,14 +119,14 @@ func transformDM_getPanelCalls(
 	getPanelCallsAllowed bool,
 	qt quoteType,
 	cachePresent bool,
-) ([]panelToImport, string, error) {
+) ([]panelToImport, string, string, error) {
 	var panelsToImport []panelToImport
 
 	var insideErr error
+	path := ""
 	query = dmGetPanelRe.ReplaceAllStringFunc(query, func(m string) string {
 		matchForSubexps := dmGetPanelRe.FindStringSubmatch(m)
 		nameOrIndex := ""
-		path := ""
 		for i, name := range dmGetPanelRe.SubexpNames() {
 			if matchForSubexps[i] == "" {
 				continue
@@ -201,14 +200,14 @@ func transformDM_getPanelCalls(
 	})
 
 	if insideErr != nil {
-		return nil, "", insideErr
+		return nil, "", "", insideErr
 	}
 
 	if len(panelsToImport) > 0 && !getPanelCallsAllowed {
-		return nil, "", makeErrUnsupported("DM_getPanel() is not yet supported by this connector.")
+		return nil, "", "", makeErrUnsupported("DM_getPanel() is not yet supported by this connector.")
 	}
 
-	return panelsToImport, query, nil
+	return panelsToImport, query, path, nil
 }
 
 func GetObjectAtPath(obj map[string]any, path string) any {
@@ -252,7 +251,7 @@ func GetObjectAtPath(obj map[string]any, path string) any {
 }
 
 func postgresMangleInsert(stmt string) string {
-	r := regexp.MustCompile("\\?")
+	r := regexp.MustCompile(`\?`)
 	counter := 0
 	return r.ReplaceAllStringFunc(stmt, func(m string) string {
 		counter += 1
@@ -274,13 +273,11 @@ func chunk(c chan map[string]any, size int) chan []map[string]any {
 
 	outer:
 		for {
-			select {
-			case next, ok := <-c:
-				if !ok {
-					break outer
-				}
-				chunk = append(chunk, next)
+			next, ok := <-c
+			if !ok {
+				break outer
 			}
+			chunk = append(chunk, next)
 
 			if len(chunk) == size {
 				out <- chunk
